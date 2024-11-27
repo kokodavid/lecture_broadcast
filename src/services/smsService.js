@@ -1,66 +1,51 @@
-import { africasTalking } from '../config/smsConfig.js';
+import fetch from 'node-fetch';
+import { MessageLogService } from './messageLogService.js';
+import { logger } from '../utils/logger.js';
 
-const sms = africasTalking.SMS;
-
-export const sendSMS = async (to, message) => {
-  try {
-    if (!to || !message) {
-      throw new Error('Both "to" and "message" parameters are required');
-    }
-
-    const options = {
-      to: [to],
-      message,
-      from: process.env.AT_SENDER_ID
-    };
-
-    console.log('Sending SMS with options:', options);
-    const response = await sms.send(options);
-    console.log('SMS response:', response);
-    return response;
-  } catch (error) {
-    console.error('Error sending SMS:', error);
-    throw error;
+export class SMSService {
+  constructor() {
+    this.apiKey = process.env.TALKSASA_API_KEY;
+    this.sender = process.env.TALKSASA_SENDER_ID;
+    this.messageLogService = new MessageLogService();
   }
-};
 
-export const sendBulkSMS = async (messages) => {
-  try {
-    if (!Array.isArray(messages) || messages.length === 0) {
-      throw new Error('Messages array is required and must not be empty');
-    }
+  async sendBulkSMS(recipients, message, lectureId) {
+    try {
+      const response = await fetch('https://api.talksasa.com/v1/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: this.sender,
+          recipients: recipients,
+          message: message,
+        }),
+      });
 
-    const recipients = messages.map(msg => {
-      if (!msg.to || !msg.message) {
-        throw new Error('Each message must have "to" and "message" properties');
+      if (!response.ok) {
+        throw new Error(`TalkSasa API error: ${response.statusText}`);
       }
 
-      return {
-        to: [msg.to], // Africa's Talking expects an array of recipients
-        message: msg.message,
-        from: process.env.AT_SENDER_ID
-      };
-    });
+      const result = await response.json();
 
-    console.log('Sending bulk SMS with recipients:', recipients);
-    const responses = await Promise.all(
-      recipients.map(recipient => sms.send(recipient))
-    );
-    console.log('Bulk SMS responses:', responses);
+      // Log messages for each recipient
+      await Promise.all(recipients.map(async (recipient) => {
+        await this.messageLogService.logMessage({
+          lectureId,
+          recipientType: 'student',
+          recipientId: recipient.id,
+          messageType: 'sms',
+          messageContent: message,
+          externalMessageId: result.message_id
+        });
+      }));
 
-    return responses;
-  } catch (error) {
-    console.error('Error sending bulk SMS:', error);
-    throw error;
+      return result;
+    } catch (error) {
+      logger.error('Error sending bulk SMS:', { error, recipientCount: recipients.length });
+      throw error;
+    }
   }
-};
-
-export const fetchBalance = async () => {
-  try {
-    const balance = await africasTalking.APPLICATION.fetchApplicationData();
-    return balance;
-  } catch (error) {
-    console.error('Error fetching balance:', error);
-    throw error;
-  }
-};
+}
